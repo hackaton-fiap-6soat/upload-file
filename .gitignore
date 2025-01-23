@@ -1,0 +1,28 @@
+# Python
+*.pyc
+*.pyo
+__pycache__/
+*.pyd
+*.pdb
+*.egg
+*.egg-info
+dist/
+build/
+.eggs/
+
+# Environment Files
+.venv/
+env/
+venv/
+venv.bak/
+*.env
+
+# Terraform
+*.tfstate
+*.tfstate.*
+*.tfvars
+.terraform/
+.terraform.lock.hcl
+
+# AWS Lambda Package (zip)
+lambda.zip
