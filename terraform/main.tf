@@ -51,135 +51,96 @@ resource "aws_s3_bucket" "file_upload" {
   force_destroy = true
 }
 
-resource "aws_sqs_queue" "file_processing_queue" {
-  name = var.sqs
-}
-
-# resource "aws_iam_role" "lambda_role" {
-#   name = var.lambda_role_name
-
-#   assume_role_policy = jsonencode({
-#     Version = "2012-10-17"
-#     Statement = [
-#       {
-#         Action    = "sts:AssumeRole"
-#         Effect    = "Allow"
-#         Principal = {
-#           Service = "lambda.amazonaws.com"
-#         }
-#       }
-#     ]
-#   })
-# }
-
-# resource "aws_iam_policy" "lambda_policy" {
-#   name        = "lambda_s3_sqs_policy"
-#   description = "Permissões para o Lambda acessar S3 e SQS"
-#   policy      = jsonencode({
-#     Version = "2012-10-17"
-#     Statement = [
-#       {
-#         Action   = [
-#           "s3:PutObject",
-#           "s3:GetObject",
-#           "s3:ListBucket"
-#         ]
-#         Effect   = "Allow"
-#         Resource = [
-#           "arn:aws:s3:::${aws_s3_bucket.file_upload.bucket}/*",
-#           "arn:aws:s3:::${aws_s3_bucket.file_upload.bucket}"
-#         ]
-#       },
-#       {
-#         Action   = "sqs:SendMessage"
-#         Effect   = "Allow"
-#         Resource = aws_sqs_queue.file_processing_queue.arn
-#       }
-#     ]
-#   })
-# }
-
-# resource "aws_iam_role_policy_attachment" "lambda_policy_attachment" {
-#   policy_arn = aws_iam_policy.lambda_policy.arn
-#   role       = aws_iam_role.lambda_role.name
-# }
-
 # Definindo a função Lambda
 
+# Package the Lambda function
+data "archive_file" "file_upload_lambda" {
+  type        = "zip"
+  source_dir  = "${path.module}/../src"
+  output_path = "${path.module}/../file_upload.zip"
+}
+
 resource "aws_lambda_function" "file_upload_lambda" {
+  filename      = "${path.module}/../file_upload.zip"
+  source_code_hash = data.archive_file.file_upload_lambda.output_base64sha256
   function_name = "file_upload_lambda"
   role          = data.aws_iam_role.lab_role.arn
-  handler       = "lambda_function.lambda_handler"
+  handler       = "app.controllers.lambda_handler.lambda_handler"
   runtime       = "python3.8"
-  filename      = "lambda.zip"
 
   environment {
     variables = {
-      INPUT_BUCKET = aws_s3_bucket.file_upload.bucket
-      SQS_URL = aws_sqs_queue.file_processing_queue.id
+      S3_BUCKET_NAME = aws_s3_bucket.file_upload.bucket
+      SQS_URL = var.sqs
     }
   }
+
+  depends_on = [ data.archive_file.file_upload_lambda ]
 }
 
 # API Gateway
-resource "aws_api_gateway_rest_api" "file_upload_api" {
-  name        = "file_upload_api"
-  description = "API para upload de arquivos"
+# Data sources para buscar a api criada por este repositório com o nome de "api_gw_api"
+data aws_apigatewayv2_apis apis {
+  name = "api_gw_api"
+}
+data aws_apigatewayv2_api api {
+  api_id = one(data.aws_apigatewayv2_apis.apis.ids)
 }
 
-resource "aws_api_gateway_resource" "upload_resource" {
-  rest_api_id = aws_api_gateway_rest_api.file_upload_api.id
-  parent_id   = aws_api_gateway_rest_api.file_upload_api.root_resource_id
-  path_part   = "upload"
+resource "aws_apigatewayv2_integration" "upload_lambda_integration" {
+  api_id             = data.aws_apigatewayv2_api.api.id
+  integration_type   = "AWS_PROXY"
+  integration_method = "POST"
+  integration_uri    = aws_lambda_function.file_upload_lambda.invoke_arn
+  payload_format_version = "2.0"
 }
 
-resource "aws_api_gateway_method" "upload_method" {
-  rest_api_id   = aws_api_gateway_rest_api.file_upload_api.id
-  resource_id   = aws_api_gateway_resource.upload_resource.id
-  http_method   = "POST"
-  authorization = "NONE"
+## Data sources para buscar o user pool criado por este repositório com o nome de "user-pool"
+
+data aws_cognito_user_pools user_pools {
+  name = "user-pool"
+}
+## Use the first user pool from the query
+data aws_cognito_user_pool user_pool {
+  user_pool_id = data.aws_cognito_user_pools.user_pools.ids[0]
 }
 
-resource "aws_api_gateway_integration" "lambda_integration" {
-  rest_api_id             = aws_api_gateway_rest_api.file_upload_api.id
-  resource_id             = aws_api_gateway_resource.upload_resource.id
-  http_method             = aws_api_gateway_method.upload_method.http_method
-  integration_http_method = "POST"
-  type                    = "AWS_PROXY"
-  uri                     = "arn:aws:apigateway:${var.region}:lambda:path/2015-03-31/functions/${aws_lambda_function.file_upload_lambda.arn}/invocations"
+data aws_cognito_user_pool_clients user_pool_clients {
+  user_pool_id = data.aws_cognito_user_pool.user_pool.id
 }
 
-resource "aws_lambda_permission" "api_gateway_lambda_permission" {
+data aws_cognito_user_pool_client user_pool_client {
+  user_pool_id = data.aws_cognito_user_pool.user_pool.id
+  client_id = data.aws_cognito_user_pool_clients.user_pool_clients.client_ids[0]
+}
+
+data "aws_region" "current" {}
+
+resource "aws_apigatewayv2_authorizer" "cognito_authorizer" {
+  api_id = data.aws_apigatewayv2_api.api.id
+  name = "cognito_authorizer"
+  authorizer_type = "JWT"
+  identity_sources = ["$request.header.Authorization"]
+  jwt_configuration {
+    issuer = "https://cognito-idp.${data.aws_region.current.name}.amazonaws.com/${data.aws_cognito_user_pool.user_pool.id}"
+    audience = [data.aws_cognito_user_pool_client.user_pool_client.id]
+  }
+}
+
+resource "aws_apigatewayv2_route" "upload_lambda_api_route" {
+  api_id    = data.aws_apigatewayv2_api.api.id
+  route_key = "ANY /upload"
+  target    = "integrations/${aws_apigatewayv2_integration.upload_lambda_integration.id}"
+  authorization_type = "JWT"
+  authorizer_id = aws_apigatewayv2_authorizer.cognito_authorizer.id
+}
+
+resource "aws_lambda_permission" "upload_lambda_allow_apigateway" {
+  statement_id  = "AllowAPIGatewayInvoke"
   action        = "lambda:InvokeFunction"
   function_name = aws_lambda_function.file_upload_lambda.function_name
   principal     = "apigateway.amazonaws.com"
-  source_arn    = "${aws_api_gateway_rest_api.file_upload_api.execution_arn}/*/*"
-}
-
-# Stage e Deployment do API Gateway
-resource "aws_api_gateway_deployment" "deployment" {
-  depends_on  = [aws_api_gateway_integration.lambda_integration]
-  rest_api_id = aws_api_gateway_rest_api.file_upload_api.id
-
-  triggers = {
-    redeployment = sha1(jsonencode(aws_api_gateway_rest_api.file_upload_api))
-  }
-
-  lifecycle {
-    create_before_destroy = true
-  }
-}
-
-resource "aws_api_gateway_stage" "api_stage" {
-  stage_name    = "dev"
-  rest_api_id   = aws_api_gateway_rest_api.file_upload_api.id
-  deployment_id = aws_api_gateway_deployment.deployment.id
-}
-
-# Outputs
-output "api_url" {
-  value       = "https://${aws_api_gateway_rest_api.file_upload_api.id}.execute-api.${var.region}.amazonaws.com/${aws_api_gateway_stage.api_stage.stage_name}"
-  description = "URL do API Gateway"
+  source_arn    = "${data.aws_apigatewayv2_api.api.execution_arn}/*"
 }
 
 output "lambda_function_name" {

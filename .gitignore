@@ -26,3 +26,4 @@ venv.bak/
 
 # AWS Lambda Package (zip)
 lambda.zip
+file_upload.zip
