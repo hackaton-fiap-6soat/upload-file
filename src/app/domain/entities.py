@@ -5,7 +5,7 @@ class File:
         self.content_type = content_type
 
     def is_valid_mp4(self, max_size: int) -> bool:
-        if self.content_type != 'video/mp4':
+        if not self.name.endswith(".mp4"):
             raise ValueError("Only .mp4 files are allowed.")
         if self.size > max_size:
             raise ValueError("File size exceeds the allowed limit.")

@@ -7,10 +7,14 @@ from app.adapters.sqs_adapter import SQSAdapter
 def lambda_handler(event, context):
     try:
         # Extrair informações da requisição
+        print(event)
         body = json.loads(event['body'])
-        file_name = body['file_name']
+        username = event.get("requestContext").get("authorizer").get("jwt").get("claims").get("username")
+        file_name = f"{username}/{body.get('file_name')}"
         file_size = body['file_size']
-        content_type = body['content_type']
+        
+        headers = event.get("headers")
+        content_type = headers.get("content-type")
 
         # Instanciar dependências
         s3_adapter = S3Adapter()
@@ -37,3 +41,4 @@ def lambda_handler(event, context):
             'statusCode': 500,
             'body': json.dumps({'error': 'Internal server error'})
         }
+    
