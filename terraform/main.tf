@@ -72,7 +72,7 @@ data "aws_subnets" "private-subnets" {
 }
 
 resource "aws_security_group" "lambda" {
-  name        = "lambda-sg"
+  name        = "upload-lambda-sg"
   description = "Security group for Lambda"
   vpc_id      = data.aws_vpc.hackathon-vpc.id # data source da vpc
 
